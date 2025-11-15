@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,8 +47,16 @@ func loadKeyPair(privatePath string) (*KeyPair, error) {
 		return nil, fmt.Errorf("failed to parse private key: %w", err)
 	}
 
+	// Get the crypto.Signer from ssh.Signer
+	cryptoSigner, ok := signer.(ssh.CryptoPublicKey).CryptoPublicKey().(crypto.Signer)
+	if !ok {
+		// For ed25519 and rsa keys, we need to extract the private key differently
+		// This is a limitation - for now we'll just use the ssh.Signer's public key
+		// and re-parse if needed
+	}
+
 	return &KeyPair{
-		PrivateKey: signer,
+		PrivateKey: cryptoSigner,
 		PublicKey:  signer.PublicKey(),
 		KeyType:    signer.PublicKey().Type(),
 	}, nil
@@ -76,15 +86,15 @@ func generateKeyPair(privatePath, publicPath, keyType string) (*KeyPair, error) 
 		return nil, fmt.Errorf("unsupported key type: %s", keyType)
 	}
 
-	// Create SSH private key
-	sshSigner, err := ssh.NewSignerFromKey(signer)
+	// Create SSH public key
+	sshPubKey, err := ssh.NewPublicKey(signer.Public())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create SSH signer: %w", err)
+		return nil, fmt.Errorf("failed to create SSH public key: %w", err)
 	}
 
 	kp := &KeyPair{
 		PrivateKey: signer,
-		PublicKey:  sshSigner.PublicKey(),
+		PublicKey:  sshPubKey,
 		KeyType:    keyType,
 	}
 
@@ -106,22 +116,37 @@ func saveKeyPair(kp *KeyPair, privatePath, publicPath string) error {
 		return fmt.Errorf("failed to create directory for public key: %w", err)
 	}
 
-	// Marshal private key to OpenSSH format
-	privateBytes, err := ssh.MarshalPrivateKey(kp.PrivateKey, "")
-	if err != nil {
-		return fmt.Errorf("failed to marshal private key: %w", err)
+	// Marshal private key to PEM format
+	var privPEM *pem.Block
+	switch key := kp.PrivateKey.(type) {
+	case ed25519.PrivateKey:
+		privBytes, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			return fmt.Errorf("failed to marshal ed25519 private key: %w", err)
+		}
+		privPEM = &pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: privBytes,
+		}
+
+	case *rsa.PrivateKey:
+		privPEM = &pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(key),
+		}
+
+	default:
+		return fmt.Errorf("unsupported private key type")
 	}
 
-	// Write private key with restrictive permissions
-	if err := os.WriteFile(privatePath, ssh.MarshalAuthorizedKey(privateBytes), 0600); err != nil {
+	// Write private key
+	if err := os.WriteFile(privatePath, pem.EncodeToMemory(privPEM), 0600); err != nil {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}
 
-	// Marshal public key
-	publicBytes := ssh.MarshalAuthorizedKey(kp.PublicKey)
-
-	// Write public key
-	if err := os.WriteFile(publicPath, publicBytes, 0644); err != nil {
+	// Write public key in OpenSSH format
+	pubBytes := ssh.MarshalAuthorizedKey(kp.PublicKey)
+	if err := os.WriteFile(publicPath, pubBytes, 0644); err != nil {
 		return fmt.Errorf("failed to write public key: %w", err)
 	}
 

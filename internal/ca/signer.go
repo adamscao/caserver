@@ -1,6 +1,7 @@
 package ca
 
 import (
+	"bytes"
 	"crypto/rand"
 	"fmt"
 	"time"
@@ -33,7 +34,7 @@ func SignCertificate(kp *KeyPair, req *SignRequest) (string, error) {
 	// Create certificate
 	cert := &ssh.Certificate{
 		Key:             userPubKey,
-		Serial          req.SerialNumber,
+		Serial:          req.SerialNumber,
 		CertType:        ssh.UserCert,
 		KeyId:           req.KeyID,
 		ValidPrincipals: []string{req.Principal},
@@ -76,7 +77,7 @@ func ValidateCertificate(cert *ssh.Certificate, caPubKey ssh.PublicKey) error {
 	// Create checker with CA public key
 	checker := &ssh.CertChecker{
 		IsUserAuthority: func(auth ssh.PublicKey) bool {
-			return ssh.KeysEqual(auth, caPubKey)
+			return bytes.Equal(auth.Marshal(), caPubKey.Marshal())
 		},
 	}
 
