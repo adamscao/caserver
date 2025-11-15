@@ -1,0 +1,70 @@
+# SSH CA Server Configuration
+
+# Server settings
+server:
+  # Listen address (use 127.0.0.1 for localhost, 0.0.0.0 for all interfaces)
+  # In production, use 127.0.0.1 and put Nginx in front
+  listen_addr: "127.0.0.1:2025"
+
+# Database configuration
+database:
+  # Path to SQLite database file
+  path: "./tmp/caserver.db"
+
+# CA key configuration
+ca:
+  # Path to CA private key (ed25519)
+  # Will be auto-generated if not exists
+  private_key_path: "./tmp/ssh_user_ca"
+  
+  # Path to CA public key
+  public_key_path: "./tmp/ssh_user_ca.pub"
+  
+  # Key type: ed25519 or rsa
+  key_type: "ed25519"
+
+# Certificate signing policy
+policy:
+  # Default certificate validity period
+  default_validity: "24h"
+  
+  # Maximum certificate validity period
+  max_validity: "48h"
+  
+  # Maximum certificates per user per day
+  max_certs_per_day: 10
+
+# Renew token configuration
+renew_token:
+  # Token validity period
+  validity: "90d"
+
+# Admin configuration
+admin:
+  # Admin token for authentication (X-Admin-Token header)
+  # IMPORTANT: Change this in production!
+  # Recommended: Generate with: openssl rand -hex 32
+  token: "your-secure-admin-token-change-me-in-production"
+
+# Encryption configuration
+encryption:
+  # Encryption key for TOTP secrets (32 bytes hex)
+  # IMPORTANT: Change this in production!
+  # Generate with: openssl rand -hex 32
+  key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+# Logging configuration
+logging:
+  # Log level: debug, info, warn, error
+  level: "info"
+  
+  # Log format: json or text
+  format: "json"
+
+# Rate limiting (optional)
+rate_limit:
+  # Enable rate limiting
+  enabled: true
+  
+  # Requests per minute per IP
+  requests_per_minute: 60
