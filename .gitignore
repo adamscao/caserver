@@ -28,5 +28,35 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+bin/
+dist/
+tmp/
+data/
+*.log
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Configuration files with secrets
+config.yaml
+!configs/config.yaml.example
+
+# CA keys (never commit!)
+ssh_user_ca
+ssh_user_ca.pub
+*.pem
+*.key
+!testdata/*.pub
+
+# Testing
+testdata/actual_*

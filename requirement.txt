@@ -50,7 +50,7 @@
      * `GET /v1/ca/user`：下载 CA 公钥。
      * `POST /v1/certs/issue`：首次签发用户证书。
      * `POST /v1/certs/renew`：续签用户证书。
-     * `POST /v1/auth/totp/setup`：初始化 TOTP（可选）。
+     * `POST /v1/admin/users`：管理员创建用户（需管理员认证）。
    * 内部调用系统命令或库实现 SSH 证书签发：
 
      * 示例：`ssh-keygen -s ssh_user_ca -I <id> -n <principal> -V <validity> <user_pubkey>`。
@@ -64,7 +64,9 @@
 4. **CA 私钥管理**
 
    * CA 私钥文件仅可被签名服务进程访问（文件权限 600）。
-   * 放置于`/etc/ssl/ssh-ca/ssh_user_ca`：
+   * 放置于 `/etc/ssl/ssh-ca/ssh_user_ca`。
+   * **如果 CA 私钥文件不存在，服务启动时自动生成**（使用 ed25519 算法）。
+   * 生成时会同时创建 `/etc/ssl/ssh-ca/ssh_user_ca.pub` 公钥文件。
 
 ---
 
@@ -140,9 +142,10 @@
 * 校验 TOTP（基于存储的用户 TOTP 种子）。
 * 检查是否在**允许的签发策略**内：
 
-  * 每用户/每天最大签发次数限制。
-  * 每张证书最大有效期，例如 ≤ 48h。
-  * 允许的 `principal` 列表。
+  * 每用户/每天最大签发次数限制（默认：10 次）。
+  * 每张证书最大有效期：≤ 48h（默认有效期：24h）。
+  * 如果用户请求的有效期超过最大值，自动调整为最大允许值。
+  * 允许的 `principal` 列表：**用户只能申请与其用户名一致的 principal**。
 * 调用 `ssh-keygen` 签发证书。
 * 写审计日志（用户名、公钥指纹、IP、User-Agent 等）。
 
@@ -174,8 +177,9 @@
 * `renew_token`：
 
   * 与用户名 + 公钥指纹绑定。
-  * 有较长但有限的有效期（例如 30 天、90 天）。
-  * 可以被服务端单方面吊销。
+  * 有较长但有限的有效期（默认：90 天）。
+  * Token 过期后，用户必须重新完整认证（用户名+密码+TOTP）。
+  * 一个用户可以有多个有效的 renew_token（支持多台机器、多个 SSH key pair）。
 
 #### 4.3.2 自动续签接口
 
@@ -204,6 +208,48 @@ curl -X POST https://ca.smartcubes.uk/v1/certs/renew \
 * 校验 `current_cert` 确实是本 CA 签发、且未被标记为滥用。
 * 检查**签发频率限制**（防止 DoS 或滥用）。
 * 签发新证书并返回。
+
+---
+
+## 4.4 用户管理（Admin）
+
+**需求：**
+
+* 新用户账号由管理员手动创建。
+* 管理员在创建用户时设置初始密码和 TOTP 种子。
+* 管理员负责将 TOTP 种子（通常以 QR 码形式）分发给用户。
+
+**接口示例：**
+
+* `POST /v1/admin/users`
+
+  * 需要管理员身份认证（通过 `X-Admin-Token` header）。
+  * 请求体示例：
+
+    ```json
+    {
+      "username": "adams",
+      "password": "initial-password",
+      "totp_secret": "BASE32ENCODEDSECRET",
+      "enabled": true,
+      "max_certs_per_day": 10
+    }
+    ```
+
+  * 返回内容：
+
+    ```json
+    {
+      "status": "ok",
+      "user_id": 123,
+      "totp_qr_url": "otpauth://totp/CA:adams?secret=BASE32ENCODEDSECRET&issuer=CA"
+    }
+    ```
+
+**管理员认证：**
+
+* 使用静态 token（在配置文件中设置），通过环境变量或配置文件加载。
+* 请求时通过 `X-Admin-Token: <token>` header 传递。
 
 ---
 
@@ -244,7 +290,8 @@ curl -X POST https://ca.smartcubes.uk/v1/certs/renew \
      * 公钥指纹
      * 签发/续签类型
      * 成功/失败原因
-   * 日志需要便于后续做可疑行为分析。
+   * 日志以 JSON 格式永久存储在 SQLite 数据库中（`audit_logs` 表）。
+   * 便于后续做可疑行为分析和查询。
 
 ---
 
@@ -253,12 +300,33 @@ curl -X POST https://ca.smartcubes.uk/v1/certs/renew \
 1. **可用性**
 
    * 签名服务建议以 systemd 服务运行，自动重启。
-   * 配合监控（Prometheus/其他）查看请求数、失败率、签发量。
 
 2. **可维护性**
 
    * 所有配置（证书有效期、最大签发次数、策略）应可通过配置文件修改，不需改代码。
+   * 配置文件格式：YAML（路径：`/etc/ssh-ca/config.yaml` 或通过 `-config` 参数指定）。
+   * 支持环境变量覆盖关键配置（如数据库路径、CA 密钥路径、监听端口）。
    * 接口版本化（`/v1/...`），为将来兼容性预留空间。
+
+3. **错误处理**
+
+   * 统一的错误响应格式（JSON）：
+
+     ```json
+     {
+       "error": "invalid_credentials",
+       "message": "用户名或密码错误",
+       "details": {}
+     }
+     ```
+
+   * HTTP 状态码使用策略：
+     * `200`：成功
+     * `400`：请求参数错误
+     * `401`：认证失败（密码、TOTP、token 错误）
+     * `403`：权限不足（如非管理员访问管理接口）
+     * `429`：请求过于频繁（触发限流）
+     * `500`：服务器内部错误
 
 ---
 
@@ -280,10 +348,11 @@ curl -X POST https://ca.smartcubes.uk/v1/certs/renew \
 
 * 自动续签逻辑：
 
-  * 定时任务（systemd timer / cron）每天跑一次：
+  * 定时任务（systemd timer / cron）每 30 分钟跑一次：
 
     * 检查当前证书剩余有效期。
-    * 若小于阈值（例如 12 小时），调用 `/v1/certs/renew` 获取新证书。
+    * 若小于阈值（默认：12 小时），调用 `/v1/certs/renew` 获取新证书。
+    * 使用 `ssh-keygen -L -f cert.pub` 解析证书有效期。
 
 ---
 
@@ -320,11 +389,11 @@ curl -fsSL "https://ca.smartcubes.uk/v1/bootstrap/server.sh" \
 
 * **URL**：`POST /v1/register/server`
 * **内容类型**：`application/json`
+* **认证**：**公开接口，无需认证**（任何服务器都可以注册）
 * **请求体示例**：
 
 ```json
 {
-  "bootstrap_token": "XYZ",
   "hostname": "web-01",
   "os": "Ubuntu 22.04",
   "kernel": "Linux 6.8.0-40-generic",
@@ -433,10 +502,8 @@ curl -fsSL "https://ca.smartcubes.uk/v1/bootstrap/server.sh" \
 #### 9.2.1 获取客户端引导脚本
 
 * **URL**：`GET /v1/bootstrap/client.sh`
-* **参数**（可选）：
-
-  * `token`：可选的一次性 token，用于限制谁能使用该脚本（可选）。
 * **返回**：`text/x-shellscript`，首行 `#!/usr/bin/env bash`。
+* **认证**：公开接口，无需认证。
 
 **调用示例（在客户端上）**：
 
@@ -529,11 +596,16 @@ curl -fsSL "https://ca.smartcubes.uk/v1/bootstrap/client.sh" | bash
      USER_NAME="adams"
 
      # 检查证书有效期（解析 ssh-keygen -L 输出）
-     if ssh-keygen -L -f "$CERT_FILE" >/tmp/ssh_cert_info 2>/dev/null; then
-         # 简单粗暴的解析：剩余时间 < 某个阈值就续签
-         if grep -q "Valid:" /tmp/ssh_cert_info; then
-             # TODO: 这里可以解析具体日期，先略
-             :
+     # 提取 Valid 行的 "to" 时间，转为时间戳，与当前时间比较
+     if ssh-keygen -L -f "$CERT_FILE" 2>/dev/null | grep -q "Valid:"; then
+         VALID_TO=$(ssh-keygen -L -f "$CERT_FILE" 2>/dev/null | grep "Valid:" | sed -E 's/.*to ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}).*/\1/')
+         EXPIRY_TS=$(date -d "$VALID_TO" +%s 2>/dev/null || echo 0)
+         NOW_TS=$(date +%s)
+         THRESHOLD=43200  # 12 小时
+
+         if [ $((EXPIRY_TS - NOW_TS)) -gt $THRESHOLD ]; then
+             echo "Certificate still valid, no renewal needed."
+             exit 0
          fi
      fi
 
@@ -568,5 +640,92 @@ curl -fsSL "https://ca.smartcubes.uk/v1/bootstrap/client.sh" | bash
      * renew 脚本路径
      * crontab 是否安装成功
      * 下一步建议配置（比如如何在 `~/.ssh/config` 新增目标服务器）
+
+---
+
+## 10. 配置文件结构
+
+服务使用 YAML 配置文件，默认路径：`/etc/ssh-ca/config.yaml`，可通过命令行参数 `-config` 指定。
+
+**配置文件示例：**
+
+```yaml
+# 服务器配置
+server:
+  listen_addr: "127.0.0.1:2025"
+
+# 数据库配置
+database:
+  path: "/var/lib/ssh-ca/caserver.db"
+
+# CA 密钥配置
+ca:
+  private_key_path: "/etc/ssl/ssh-ca/ssh_user_ca"
+  public_key_path: "/etc/ssl/ssh-ca/ssh_user_ca.pub"
+  key_type: "ed25519"  # 或 rsa
+
+# 证书签发策略
+policy:
+  default_validity: "24h"
+  max_validity: "48h"
+  max_certs_per_day: 10
+
+# Renew Token 配置
+renew_token:
+  validity: "90d"  # 90 天
+
+# 管理员配置
+admin:
+  token: "your-secure-admin-token-here"  # 建议从环境变量读取
+
+# 日志配置
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "json"  # json 或 text
+```
+
+**环境变量覆盖：**
+
+* `SSH_CA_DB_PATH`：数据库路径
+* `SSH_CA_PRIVATE_KEY`：CA 私钥路径
+* `SSH_CA_ADMIN_TOKEN`：管理员 token
+* `SSH_CA_LISTEN_ADDR`：监听地址
+
+---
+
+## 11. API 接口汇总
+
+### 公开接口（无需认证）
+
+1. `GET /v1/ca/user`
+   - 下载 CA 公钥
+
+2. `GET /v1/bootstrap/server.sh`
+   - 获取服务器引导脚本
+
+3. `GET /v1/bootstrap/client.sh`
+   - 获取客户端引导脚本
+
+4. `POST /v1/register/server`
+   - 服务器注册
+
+### 用户认证接口
+
+5. `POST /v1/certs/issue`
+   - 首次签发证书（需用户名+密码+TOTP）
+
+6. `POST /v1/certs/renew`
+   - 续签证书（需 renew_token）
+
+### 管理员接口（需 X-Admin-Token）
+
+7. `POST /v1/admin/users`
+   - 创建用户
+
+---
+
+## 12. 数据库设计
+
+见单独文档：`database_schema.md`
 
 
