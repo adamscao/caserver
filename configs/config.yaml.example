@@ -9,16 +9,16 @@ server:
 # Database configuration
 database:
   # Path to SQLite database file
-  path: "./tmp/caserver.db"
+  path: "./data/caserver.db"
 
 # CA key configuration
 ca:
   # Path to CA private key (ed25519)
   # Will be auto-generated if not exists
-  private_key_path: "./tmp/ssh_user_ca"
-  
+  private_key_path: "./data/ssh_user_ca"
+
   # Path to CA public key
-  public_key_path: "./tmp/ssh_user_ca.pub"
+  public_key_path: "./data/ssh_user_ca.pub"
   
   # Key type: ed25519 or rsa
   key_type: "ed25519"
