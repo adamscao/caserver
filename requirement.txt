@@ -1,0 +1,572 @@
+## 1. 背景与目标
+
+### 1.1 背景
+
+* 当前使用 OpenSSH CA 作为统一的 SSH 证书签发机制。
+* 希望用 **HTTP/HTTPS 服务 + Nginx 前端** 来集中管理证书签发和续签，避免在每台服务器上单独维护 authorized_keys。
+* 不考虑极端灾难恢复场景，本服务主要解决**日常使用与自动续签**问题。
+
+### 1.2 目标
+
+* 提供一个统一的 **“SSH 用户证书签发服务”**：
+
+  1. 服务器可以通过 HTTP 下载 **CA 公钥**，用来配置 `TrustedUserCAKeys`。
+  2. 客户端首次接入时，通过 **用户名+密码+TOTP** 完成认证，并提交自己的 SSH 公钥，获取 CA 签发的 SSH 证书。
+  3. 客户端之后可以通过脚本自动请求 **证书续签**，在证书接近过期时自动更新，无需人工交互。
+
+---
+
+## 2. 角色与术语
+
+* **CA**：SSH 证书颁发机构，持有用户 CA 私钥/公钥对（例如 `ssh_user_ca` / `ssh_user_ca.pub`）。
+* **签名服务（Signing Service）**：
+
+  * 后端应用（可用 Go 实现），负责认证用户、调用 `ssh-keygen -s` 或等价库生成证书。
+  * 不直接对外暴露，通过 Nginx 做前端代理。
+* **Nginx**：
+
+  * 提供 HTTPS 终端、反向代理、限流、访问日志。
+* **客户端（Client）**：用户终端（Linux/macOS/Windows），用脚本或工具与签名服务交互，管理本机 SSH key 与证书。
+* **TOTP**：基于时间的一次性密码，用于首次登录和敏感操作认证。
+
+---
+
+## 3. 总体架构
+
+### 3.1 架构概览
+
+1. **Nginx**
+
+   * 监听 443 (HTTPS)，终止 TLS，会做：
+
+     * 反向代理到后端签名服务（例如 `127.0.0.1:2025`）。
+     * 提供静态下载接口（如 `/ca/user_ca.pub`）。
+
+
+2. **签名服务后端**
+
+   * 提供 REST 风格接口：
+
+     * `GET /v1/ca/user`：下载 CA 公钥。
+     * `POST /v1/certs/issue`：首次签发用户证书。
+     * `POST /v1/certs/renew`：续签用户证书。
+     * `POST /v1/auth/totp/setup`：初始化 TOTP（可选）。
+   * 内部调用系统命令或库实现 SSH 证书签发：
+
+     * 示例：`ssh-keygen -s ssh_user_ca -I <id> -n <principal> -V <validity> <user_pubkey>`。
+
+3. **数据存储**
+
+   * 用户账号信息（用户名、密码哈希、TOTP 种子、状态等）。
+   * 签发记录（审计用途）：谁、什么时候、从哪里、签发了哪把 key、有效期多久。
+   * 使用SQLite存储。
+
+4. **CA 私钥管理**
+
+   * CA 私钥文件仅可被签名服务进程访问（文件权限 600）。
+   * 放置于`/etc/ssl/ssh-ca/ssh_user_ca`：
+
+---
+
+## 4. 功能性需求
+
+### 4.1 CA 公钥下载
+
+**需求：**
+
+* 提供 HTTP 接口，供服务器/客户端下载 CA 公钥，用于配置 `TrustedUserCAKeys` 或校验证书。
+* 可以按类型区分（用户 CA、主机 CA），但先只考虑用户 CA。
+
+**接口示例：**
+
+* `GET /v1/ca/user`
+
+  * 返回内容：`text/plain`，例如 `ssh-ed25519 AAAAC3Nz... user_ca@domain`
+  * 支持 `curl https://ca.example.com/v1/ca/user -o ssh_user_ca.pub`。
+
+**安全要求：**
+
+* 该接口是 **公开的**，不需要认证。
+
+---
+
+### 4.2 首次签发用户证书（Initial Issue）
+
+**需求：**
+
+* 客户端本地生成 SSH key pair，不把私钥上传。
+* 首次签发时，用户需要经过 **用户名+密码+TOTP** 三要素认证。
+* 成功后，服务为该用户名签发一张 **短期有效的 SSH 用户证书**。
+
+**典型流程：**
+
+1. 客户端本地生成 key（例：ed25519）：
+
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_ca -C "user@host"
+   ```
+
+2. 调用 API：
+
+   ```bash
+   curl -X POST https://ca.smartcubes.uk/v1/certs/issue \
+     -H "Content-Type: application/json" \
+     -d '{
+       "username": "adams",
+       "password": "xxxxxx",
+       "totp": "123456",
+       "public_key": "ssh-ed25519 AAAAC3Nz... user@host",
+       "client_hostname": "arch-desktop",
+       "requested_principals": ["adams"],
+       "requested_validity": "24h"
+     }'
+   ```
+
+3. 返回内容（JSON）：
+
+   ```json
+   {
+     "certificate": "ssh-ed25519-cert-v01@openssh.com AAAA... user@host",
+     "valid_from": "2025-11-15T10:00:00Z",
+     "valid_to": "2025-11-16T10:00:00Z",
+     "principal": "adams",
+     "serial": 12345678
+   }
+   ```
+
+**服务端行为：**
+
+* 校验用户名/密码（密码存储为安全哈希，如 Argon2id）。
+* 校验 TOTP（基于存储的用户 TOTP 种子）。
+* 检查是否在**允许的签发策略**内：
+
+  * 每用户/每天最大签发次数限制。
+  * 每张证书最大有效期，例如 ≤ 48h。
+  * 允许的 `principal` 列表。
+* 调用 `ssh-keygen` 签发证书。
+* 写审计日志（用户名、公钥指纹、IP、User-Agent 等）。
+
+---
+
+### 4.3 证书续签（Renew）
+
+**需求：**
+
+* 客户端在证书快到期时自动续签。
+* 续签时，尽量避免每次都要求互动式密码输入，但仍需有认证机制，避免任何拿到公钥的人都能续签。
+
+**推荐设计（可分两层）：**
+
+#### 4.3.1 初次签发后发放一个“续签令牌”（Renew Token）
+
+* 在首次签发成功时，服务端额外返回一个 `renew_token`：
+
+  ```json
+  {
+    "certificate": "...",
+    "valid_to": "...",
+    "renew_token": "random-128bit-or-jwt"
+  }
+  ```
+
+* 客户端将 `renew_token` 存在本地（推荐加密存储）。
+
+* `renew_token`：
+
+  * 与用户名 + 公钥指纹绑定。
+  * 有较长但有限的有效期（例如 30 天、90 天）。
+  * 可以被服务端单方面吊销。
+
+#### 4.3.2 自动续签接口
+
+**接口：**
+
+* `POST /v1/certs/renew`
+
+**请求示例：**
+
+```bash
+curl -X POST https://ca.smartcubes.uk/v1/certs/renew \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "adams",
+    "public_key": "ssh-ed25519 AAAAC3Nz... user@host",
+    "renew_token": "xxxxxx",
+    "current_cert": "ssh-ed25519-cert-v01@openssh.com AAAA...",
+    "requested_validity": "24h"
+  }'
+```
+
+**服务端行为：**
+
+* 校验 `renew_token` 是否有效、未过期。
+* 校验 `public_key` 指纹与该 token 绑定的指纹一致。
+* 校验 `current_cert` 确实是本 CA 签发、且未被标记为滥用。
+* 检查**签发频率限制**（防止 DoS 或滥用）。
+* 签发新证书并返回。
+
+---
+
+## 5. 安全性需求
+
+1. **传输安全**
+
+   * 全部接口通过 HTTPS 暴露，TLS 强加密，禁止 HTTP 明文访问（301/403）。
+
+2. **身份认证**
+
+   * 首次签发必须使用：用户名 + 密码 + TOTP 三要素。
+   * 续签使用 `renew_token`，`renew_token` 应为高熵随机值（至少 128 bit），与用户名+公钥指纹绑定。
+   * 支持服务端手动吊销 token（例如通过管理接口或 DB 操作）。
+
+3. **密码存储**
+
+   * 使用 Argon2id / scrypt / bcrypt 存储密码哈希。
+   * 严禁明文密码存储。
+
+4. **TOTP 安全**
+
+   * TOTP 种子以加密形式存储（可用应用级加密）。
+   * TOTP 校验需考虑时间偏移（±1 时间窗口）。
+
+5. **CA 私钥保护**
+
+   * 文件权限 600，属主为运行签名服务的专用用户。
+   * 可选：签名服务与其他服务隔离运行，降低被攻陷的概率。
+
+6. **审计与日志**
+
+   * 记录：
+
+     * 请求时间
+     * 客户端 IP
+     * 用户名
+     * 公钥指纹
+     * 签发/续签类型
+     * 成功/失败原因
+   * 日志需要便于后续做可疑行为分析。
+
+---
+
+## 6. 非功能性需求
+
+1. **可用性**
+
+   * 签名服务建议以 systemd 服务运行，自动重启。
+   * 配合监控（Prometheus/其他）查看请求数、失败率、签发量。
+
+2. **可维护性**
+
+   * 所有配置（证书有效期、最大签发次数、策略）应可通过配置文件修改，不需改代码。
+   * 接口版本化（`/v1/...`），为将来兼容性预留空间。
+
+---
+
+## 7. 客户端需求（约束）
+
+* 客户端必须支持：
+
+  * 本地生成 SSH key pair（ed25519/rsa）。
+  * 使用 curl 或内置 HTTP 客户端调用签名服务。
+  * 将返回的证书文件存到 `~/.ssh/id_xxx-cert.pub`，并更新 `~/.ssh/config`：
+
+    ```sshconfig
+    Host myserver
+        HostName myserver.example.com
+        User adams
+        IdentityFile ~/.ssh/id_ed25519_ca
+        IdentitiesOnly yes
+    ```
+
+* 自动续签逻辑：
+
+  * 定时任务（systemd timer / cron）每天跑一次：
+
+    * 检查当前证书剩余有效期。
+    * 若小于阈值（例如 12 小时），调用 `/v1/certs/renew` 获取新证书。
+
+---
+
+## 8. 服务器自助接入接口（Server Bootstrap）
+
+### 8.1 目标
+
+* 让一台**新服务器**通过一条命令完成：
+
+  1. 下载 CA 公钥并配置 `TrustedUserCAKeys`。
+  2. 修改 `sshd_config` 并重启 sshd。
+  3. 收集本机信息（IP、OS、SSH 版本等）上报给签名服务。
+  4. （可选）生成一个专用的 ansible 管理 SSH key，并把公钥上报到签名服务，作为将来 ansible 使用的连接凭据。
+
+之后，签名服务就可以自动根据这些信息更新 ansible inventory，或者对该服务器发起管理操作。
+
+---
+
+### 8.2 API 设计
+
+#### 8.2.1 获取服务器引导脚本
+
+* **URL**：`GET /v1/bootstrap/server.sh`
+* **返回**：`Content-Type: text/x-shellscript` 的 shell 脚本，首行 `#!/usr/bin/env bash`。
+
+**调用示例（在目标服务器上）**：
+
+```bash
+curl -fsSL "https://ca.smartcubes.uk/v1/bootstrap/server.sh" \
+  | sudo bash
+```
+
+#### 8.2.2 上报服务器信息与 ansible 公钥
+
+* **URL**：`POST /v1/register/server`
+* **内容类型**：`application/json`
+* **请求体示例**：
+
+```json
+{
+  "bootstrap_token": "XYZ",
+  "hostname": "web-01",
+  "os": "Ubuntu 22.04",
+  "kernel": "Linux 6.8.0-40-generic",
+  "arch": "x86_64",
+  "ip_addresses": ["10.0.1.10", "192.168.1.50"],
+  "ssh_version": "OpenSSH_9.6p1",
+  "ansible_user": "ansible",
+  "ansible_pubkey": "ssh-ed25519 AAAAC3Nz... ansible@web-01",
+  "labels": ["prod", "web"],
+  "ca_trusted": true
+}
+```
+
+* **响应**：
+
+```json
+{
+  "status": "ok",
+  "server_id": "srv-123456",
+  "next_actions": []
+}
+```
+
+---
+
+### 8.3 服务器引导脚本行为（server.sh）需求
+
+脚本大致步骤：
+
+1. **基本检查**
+
+   * 检查是否在 root 下运行，否则提示 `sudo`。
+   * 检查是否有 `curl` / `wget`；没有则尝试安装（不同 OS 分支：`apt` / `yum` / `dnf` / `pacman` / `zypper` 等）。
+
+2. **收集系统信息**
+
+   * `hostname`
+   * `/etc/os-release` 内容（ID、VERSION_ID）
+   * `uname -r` / `uname -m`
+   * `ip -4 addr` / `ip -6 addr`（过滤 loopback）
+   * `sshd -V`
+
+3. **下载用户 CA 公钥**
+
+   * 调用：`curl -fsSL https://ca.smartcubes.uk/v1/ca/user -o /etc/ssh/ssh_user_ca.pub`
+   * 文件权限设置为 `644`。
+
+4. **配置 `sshd_config`**
+
+   * 确保存在配置项：
+
+     ```conf
+     TrustedUserCAKeys /etc/ssh/ssh_user_ca.pub
+     ```
+   * 保留原有配置，不要覆盖无关内容（使用 `sed` / `awk` 或 `crudini` 风格替换）。
+
+5. **重启 sshd**
+
+   * `systemctl reload sshd` 或 `systemctl reload ssh`，若失败再尝试 `restart`。
+   * 若重启失败，要**回滚** `sshd_config` 修改，并提示手动检查。
+
+6. **生成 ansible 专用 SSH key（可选但建议）**
+
+   * 如果没有 `/home/ansible/.ssh/id_ed25519`：
+
+     ```bash
+     useradd -m ansible  # 如用户不存在
+     sudo -u ansible ssh-keygen -t ed25519 -N "" -f /home/ansible/.ssh/id_ed25519
+     ```
+   * 读取公钥内容。
+
+7. **上报注册信息**
+
+   * 构造 JSON（无 jq 也能用 pure bash 拼）。
+   * `curl -X POST https://ca.smartcubes.uk/v1/register/server` 提交。
+
+8. **输出结果**
+
+   * 打印：
+
+     * 已配置 `TrustedUserCAKeys`
+     * 已上报信息，返回的 `server_id`
+     * ansible 连接示例：
+
+       ```bash
+       ssh -i ansible_id_ed25519 ansible@web-01
+       ```
+
+---
+
+## 9. 客户端自助接入接口（Client Bootstrap）
+
+### 9.1 目标
+
+* 用户在新客户端（例如一台新 Linux / macOS / WSL 机器）上，一条命令完成：
+
+  1. 生成 SSH key（如果没有）。
+  2. 调用签名服务首次签发证书（提示输入用户名、密码、TOTP）。
+  3. 写入 `~/.ssh/config` 里典型 Host 配置。
+  4. 安装 crontab 任务，定期自动续签证书。
+
+---
+
+### 9.2 API 设计
+
+#### 9.2.1 获取客户端引导脚本
+
+* **URL**：`GET /v1/bootstrap/client.sh`
+* **参数**（可选）：
+
+  * `token`：可选的一次性 token，用于限制谁能使用该脚本（可选）。
+* **返回**：`text/x-shellscript`，首行 `#!/usr/bin/env bash`。
+
+**调用示例（在客户端上）**：
+
+```bash
+curl -fsSL "https://ca.smartcubes.uk/v1/bootstrap/client.sh" | bash
+```
+
+---
+
+### 9.3 客户端引导脚本行为（client.sh）需求
+
+脚本主要做以下几件事：
+
+1. **检查环境**
+
+   * 必须有：`ssh`, `ssh-keygen`, `curl`, `crontab`。
+   * 如果缺少，提示用户手动安装（不要自动装，以免在各种发行版上乱跑包管理器）。
+
+2. **交互获取基础信息**
+
+   * 提示用户输入：
+
+     * 签名服务 URL（默认 `https://ca.smartcubes.uk`，可回车使用默认）
+     * SSH 用户名（用于证书 principal，例如 `adams`）
+     * 签名服务账户用户名（如不同于 SSH 用户名，可单独问；简单起见可以共用）
+     * 初次认证密码（隐藏输入）
+     * TOTP 验证码（一次）
+
+3. **生成或复用 SSH key**
+
+   * 默认使用 `~/.ssh/id_ed25519_ca`（避免干扰现有 key）。
+   * 如果不存在，则自动生成：
+
+     ```bash
+     ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_ca -N "" -C "user@client-bootstrap"
+     ```
+   * 读取公钥内容。
+
+4. **首次签名**
+
+   * 调用 `/v1/certs/issue`：
+
+     ```json
+     {
+       "username": "adams",
+       "password": "******",
+       "totp": "123456",
+       "public_key": "ssh-ed25519 AAAA...",
+       "client_hostname": "arch-laptop",
+       "requested_principals": ["adams"],
+       "requested_validity": "24h"
+     }
+     ```
+   * 成功后：
+
+     * 把 `certificate` 内容保存为 `~/.ssh/id_ed25519_ca-cert.pub`。
+     * 如果响应中有 `renew_token`，保存到 `~/.ssh/ssh_ca_renew_token`（600 权限）。
+
+5. **写入 SSH 配置**
+
+   * 在 `~/.ssh/config` 中追加（如果不存在）类似内容：
+
+     ```sshconfig
+     Host ssh-ca-*
+         IdentitiesOnly yes
+         IdentityFile ~/.ssh/id_ed25519_ca
+
+     # 示例，也可以不写死 HostName，留给用户自己配
+     # Host my-server-1
+     #     HostName my-server-1.example.com
+     #     User adams
+     #     IdentityFile ~/.ssh/id_ed25519_ca
+     #     IdentitiesOnly yes
+     ```
+
+   * 或者仅输出提示信息，不强行修改 config（可通过命令行参数控制）。
+
+6. **安装自动续签 crontab**
+
+   * 写一个小脚本，比如：`~/.ssh/ssh_ca_renew.sh`：
+
+     ```bash
+     #!/usr/bin/env bash
+     set -euo pipefail
+
+     API_URL="https://ca.smartcubes.uk"
+     KEY_FILE="$HOME/.ssh/id_ed25519_ca"
+     CERT_FILE="$HOME/.ssh/id_ed25519_ca-cert.pub"
+     TOKEN_FILE="$HOME/.ssh/ssh_ca_renew_token"
+     USER_NAME="adams"
+
+     # 检查证书有效期（解析 ssh-keygen -L 输出）
+     if ssh-keygen -L -f "$CERT_FILE" >/tmp/ssh_cert_info 2>/dev/null; then
+         # 简单粗暴的解析：剩余时间 < 某个阈值就续签
+         if grep -q "Valid:" /tmp/ssh_cert_info; then
+             # TODO: 这里可以解析具体日期，先略
+             :
+         fi
+     fi
+
+     if [[ ! -f "$TOKEN_FILE" ]]; then
+         echo "No renew token, skip."
+         exit 0
+     fi
+
+     PUBKEY=$(cat "$KEY_FILE.pub")
+     TOKEN=$(cat "$TOKEN_FILE")
+
+     curl -fsSL -X POST "$API_URL/v1/certs/renew" \
+       -H "Content-Type: application/json" \
+       -d "$(jq -n --arg u "$USER_NAME" --arg k "$PUBKEY" --arg t "$TOKEN" \
+             '{username:$u, public_key:$k, renew_token:$t, requested_validity:"24h"}')" \
+       > "$CERT_FILE.new" && mv "$CERT_FILE.new" "$CERT_FILE"
+     ```
+
+   * 使用 `crontab -e` 自动添加条目（如果不存在）：
+
+     ```cron
+     */30 * * * * $HOME/.ssh/ssh_ca_renew.sh >/dev/null 2>&1
+     ```
+
+   * 默认每 30 分钟检查一次，证书快过期就续签。
+
+7. **输出最终提示**
+
+   * 打印：
+
+     * key 和 cert 文件路径
+     * renew 脚本路径
+     * crontab 是否安装成功
+     * 下一步建议配置（比如如何在 `~/.ssh/config` 新增目标服务器）
+
+
