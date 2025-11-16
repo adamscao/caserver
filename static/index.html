@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSH CA Server - Certificate Authority for SSH</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.95;
+        }
+
+        .lang-switcher {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .lang-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 2px solid rgba(255,255,255,0.4);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .lang-btn:hover, .lang-btn.active {
+            background: rgba(255,255,255,0.3);
+            border-color: white;
+        }
+
+        .content {
+            padding: 40px 30px;
+        }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section h2 {
+            color: #667eea;
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #667eea;
+        }
+
+        .section h3 {
+            color: #764ba2;
+            font-size: 1.3em;
+            margin: 20px 0 10px 0;
+        }
+
+        .section p, .section li {
+            margin-bottom: 12px;
+            color: #555;
+        }
+
+        .section ul {
+            margin-left: 20px;
+        }
+
+        .code-block {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .code-block code {
+            color: #f8f8f2;
+        }
+
+        .highlight {
+            background: #fff3cd;
+            padding: 15px;
+            border-left: 4px solid #ffc107;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+
+        .api-list {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+
+        .api-item {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
+
+        .api-method {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 12px;
+            margin-right: 10px;
+        }
+
+        .method-get {
+            background: #28a745;
+            color: white;
+        }
+
+        .method-post {
+            background: #007bff;
+            color: white;
+        }
+
+        .footer {
+            background: #f8f9fa;
+            padding: 20px 30px;
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+        }
+
+        .lang-content {
+            display: none;
+        }
+
+        .lang-content.active {
+            display: block;
+        }
+
+        .status-badge {
+            display: inline-block;
+            background: #28a745;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8em;
+            }
+
+            .lang-switcher {
+                position: static;
+                justify-content: center;
+                margin-bottom: 20px;
+            }
+
+            .content {
+                padding: 20px 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="lang-switcher">
+                <button class="lang-btn active" onclick="switchLang('en')">English</button>
+                <button class="lang-btn" onclick="switchLang('zh')">中文</button>
+            </div>
+            <h1>🔐 SSH CA Server</h1>
+            <p class="lang-content active" data-lang="en">Centralized SSH Certificate Authority Service</p>
+            <p class="lang-content" data-lang="zh">集中式SSH证书颁发服务</p>
+            <span class="status-badge">Online</span>
+        </div>
+
+        <!-- English Content -->
+        <div class="content lang-content active" data-lang="en">
+            <div class="section">
+                <h2>📖 What is SSH CA Server?</h2>
+                <p>SSH CA Server is a centralized certificate authority for managing SSH access across multiple servers. Instead of distributing public keys manually to each server, you can issue short-lived SSH certificates that are automatically trusted by all configured servers.</p>
+
+                <h3>Key Features</h3>
+                <ul>
+                    <li>🔒 <strong>Two-Factor Authentication</strong> - Password + TOTP for certificate issuance</li>
+                    <li>⏰ <strong>Short-lived Certificates</strong> - 24-hour validity period (configurable)</li>
+                    <li>🔄 <strong>Automatic Renewal</strong> - Renew tokens for unattended certificate renewal</li>
+                    <li>📊 <strong>Audit Logging</strong> - Complete audit trail of all certificate operations</li>
+                    <li>🚀 <strong>Easy Deployment</strong> - One-command setup for servers and clients</li>
+                </ul>
+            </div>
+
+            <div class="section">
+                <h2>🚀 Quick Start</h2>
+
+                <h3>For Servers (Trust CA)</h3>
+                <p>Run this command on any SSH server to configure it to trust certificates from this CA:</p>
+                <div class="code-block"><code>curl -fsSL https://ca.smartcubes.uk/v1/bootstrap/server.sh | sudo bash</code></div>
+                <p>This will:</p>
+                <ul>
+                    <li>Download the CA public key</li>
+                    <li>Configure sshd to trust CA-signed certificates</li>
+                    <li>Register the server with the CA for audit purposes</li>
+                </ul>
+
+                <h3>For Clients (Get Certificate)</h3>
+                <p>Run this command on your client machine to obtain an SSH certificate:</p>
+                <div class="code-block"><code>curl -fsSL https://ca.smartcubes.uk/v1/bootstrap/client.sh | bash</code></div>
+                <p>You will be prompted for:</p>
+                <ul>
+                    <li>Username</li>
+                    <li>Password</li>
+                    <li>TOTP code (from your authenticator app)</li>
+                </ul>
+                <p>After successful authentication, you'll receive:</p>
+                <ul>
+                    <li>SSH certificate (valid for 24 hours)</li>
+                    <li>Renewal token (valid for 90 days)</li>
+                    <li>Auto-configured SSH client settings</li>
+                </ul>
+
+                <h3>Using Your Certificate</h3>
+                <p>Once configured, simply SSH to any server that trusts this CA:</p>
+                <div class="code-block"><code>ssh username@server.example.com</code></div>
+                <p>Your SSH client will automatically use the CA certificate for authentication.</p>
+            </div>
+
+            <div class="section">
+                <h2>🔌 API Reference</h2>
+
+                <div class="api-list">
+                    <div class="api-item">
+                        <span class="api-method method-get">GET</span>
+                        <strong>/v1/ca/user</strong>
+                        <p>Download the CA public key</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-get">GET</span>
+                        <strong>/v1/bootstrap/server.sh</strong>
+                        <p>Get server bootstrap script</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-get">GET</span>
+                        <strong>/v1/bootstrap/client.sh</strong>
+                        <p>Get client bootstrap script</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-post">POST</span>
+                        <strong>/v1/certs/issue</strong>
+                        <p>Issue new certificate (requires username + password + TOTP)</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-post">POST</span>
+                        <strong>/v1/certs/renew</strong>
+                        <p>Renew existing certificate (requires renewal token)</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-post">POST</span>
+                        <strong>/v1/register/server</strong>
+                        <p>Register a server (called automatically by bootstrap script)</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>💡 Manual Certificate Issuance</h2>
+                <p>If you prefer to use the API directly:</p>
+
+                <h3>Step 1: Generate SSH Key</h3>
+                <div class="code-block"><code>ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_ca -C "user@client"</code></div>
+
+                <h3>Step 2: Request Certificate</h3>
+                <div class="code-block"><code>curl -X POST https://ca.smartcubes.uk/v1/certs/issue \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "your-username",
+    "password": "your-password",
+    "totp": "123456",
+    "public_key": "ssh-ed25519 AAAA...",
+    "client_hostname": "laptop",
+    "requested_principals": ["your-username"],
+    "requested_validity": "24h"
+  }' | jq -r '.certificate' > ~/.ssh/id_ed25519_ca-cert.pub</code></div>
+            </div>
+
+            <div class="section">
+                <h2>🔐 Security</h2>
+                <ul>
+                    <li>All communication over HTTPS (TLS 1.3)</li>
+                    <li>Two-factor authentication (TOTP) required for certificate issuance</li>
+                    <li>Short-lived certificates (24-hour default validity)</li>
+                    <li>Renewal tokens are bound to specific public keys</li>
+                    <li>Complete audit logging of all certificate operations</li>
+                    <li>Rate limiting to prevent abuse</li>
+                </ul>
+            </div>
+
+            <div class="section">
+                <h2>📚 Documentation</h2>
+                <p>For administrators and developers:</p>
+                <ul>
+                    <li>Complete requirements and design documentation available in the repository</li>
+                    <li>Database schema and audit log structure documented</li>
+                    <li>API reference with examples</li>
+                    <li>Deployment and configuration guides</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Chinese Content -->
+        <div class="content lang-content" data-lang="zh">
+            <div class="section">
+                <h2>📖 什么是 SSH CA Server？</h2>
+                <p>SSH CA Server 是一个集中式的SSH证书颁发机构，用于管理多台服务器的SSH访问。无需在每台服务器上手动分发公钥，您可以签发短期有效的SSH证书，这些证书会被所有已配置的服务器自动信任。</p>
+
+                <h3>核心特性</h3>
+                <ul>
+                    <li>🔒 <strong>双因素认证</strong> - 密码 + TOTP 用于证书签发</li>
+                    <li>⏰ <strong>短期证书</strong> - 24小时有效期（可配置）</li>
+                    <li>🔄 <strong>自动续签</strong> - 续签令牌支持无人值守自动续订</li>
+                    <li>📊 <strong>审计日志</strong> - 完整的证书操作审计追踪</li>
+                    <li>🚀 <strong>易于部署</strong> - 服务器和客户端一键配置</li>
+                </ul>
+            </div>
+
+            <div class="section">
+                <h2>🚀 快速开始</h2>
+
+                <h3>服务器端（信任CA）</h3>
+                <p>在任何SSH服务器上运行以下命令，配置其信任此CA签发的证书：</p>
+                <div class="code-block"><code>curl -fsSL https://ca.smartcubes.uk/v1/bootstrap/server.sh | sudo bash</code></div>
+                <p>此脚本将：</p>
+                <ul>
+                    <li>下载CA公钥</li>
+                    <li>配置sshd信任CA签名的证书</li>
+                    <li>向CA注册服务器信息（用于审计）</li>
+                </ul>
+
+                <h3>客户端（获取证书）</h3>
+                <p>在您的客户端机器上运行以下命令获取SSH证书：</p>
+                <div class="code-block"><code>curl -fsSL https://ca.smartcubes.uk/v1/bootstrap/client.sh | bash</code></div>
+                <p>您需要输入：</p>
+                <ul>
+                    <li>用户名</li>
+                    <li>密码</li>
+                    <li>TOTP验证码（来自您的身份验证器应用）</li>
+                </ul>
+                <p>认证成功后，您将获得：</p>
+                <ul>
+                    <li>SSH证书（有效期24小时）</li>
+                    <li>续签令牌（有效期90天）</li>
+                    <li>自动配置的SSH客户端设置</li>
+                </ul>
+
+                <h3>使用证书</h3>
+                <p>配置完成后，直接SSH到任何信任此CA的服务器：</p>
+                <div class="code-block"><code>ssh username@server.example.com</code></div>
+                <p>您的SSH客户端将自动使用CA证书进行身份验证。</p>
+            </div>
+
+            <div class="section">
+                <h2>🔌 API 参考</h2>
+
+                <div class="api-list">
+                    <div class="api-item">
+                        <span class="api-method method-get">GET</span>
+                        <strong>/v1/ca/user</strong>
+                        <p>下载CA公钥</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-get">GET</span>
+                        <strong>/v1/bootstrap/server.sh</strong>
+                        <p>获取服务器引导脚本</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-get">GET</span>
+                        <strong>/v1/bootstrap/client.sh</strong>
+                        <p>获取客户端引导脚本</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-post">POST</span>
+                        <strong>/v1/certs/issue</strong>
+                        <p>签发新证书（需要用户名 + 密码 + TOTP）</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-post">POST</span>
+                        <strong>/v1/certs/renew</strong>
+                        <p>续签现有证书（需要续签令牌）</p>
+                    </div>
+
+                    <div class="api-item">
+                        <span class="api-method method-post">POST</span>
+                        <strong>/v1/register/server</strong>
+                        <p>注册服务器（由引导脚本自动调用）</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>💡 手动签发证书</h2>
+                <p>如果您希望直接使用API：</p>
+
+                <h3>步骤1：生成SSH密钥</h3>
+                <div class="code-block"><code>ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_ca -C "user@client"</code></div>
+
+                <h3>步骤2：请求证书</h3>
+                <div class="code-block"><code>curl -X POST https://ca.smartcubes.uk/v1/certs/issue \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "your-username",
+    "password": "your-password",
+    "totp": "123456",
+    "public_key": "ssh-ed25519 AAAA...",
+    "client_hostname": "laptop",
+    "requested_principals": ["your-username"],
+    "requested_validity": "24h"
+  }' | jq -r '.certificate' > ~/.ssh/id_ed25519_ca-cert.pub</code></div>
+            </div>
+
+            <div class="section">
+                <h2>🔐 安全性</h2>
+                <ul>
+                    <li>所有通信通过HTTPS加密（TLS 1.3）</li>
+                    <li>证书签发需要双因素认证（TOTP）</li>
+                    <li>短期证书（默认24小时有效期）</li>
+                    <li>续签令牌与特定公钥绑定</li>
+                    <li>完整的证书操作审计日志</li>
+                    <li>速率限制防止滥用</li>
+                </ul>
+            </div>
+
+            <div class="section">
+                <h2>📚 文档</h2>
+                <p>面向管理员和开发者：</p>
+                <ul>
+                    <li>代码仓库中提供完整的需求和设计文档</li>
+                    <li>数据库schema和审计日志结构文档</li>
+                    <li>API参考和示例</li>
+                    <li>部署和配置指南</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>&copy; 2025 SSH CA Server | Powered by Go + Gin | Secured by Let's Encrypt</p>
+            <p>Status: <a href="/health" style="color: #28a745; text-decoration: none;">Health Check</a> | CA Public Key: <a href="/v1/ca/user" style="color: #667eea; text-decoration: none;">Download</a></p>
+        </div>
+    </div>
+
+    <script>
+        function switchLang(lang) {
+            // Update active button
+            document.querySelectorAll('.lang-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update content
+            document.querySelectorAll('.lang-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.querySelectorAll(`[data-lang="${lang}"]`).forEach(content => {
+                content.classList.add('active');
+            });
+
+            // Update HTML lang attribute
+            document.documentElement.lang = lang;
+        }
+    </script>
+</body>
+</html>

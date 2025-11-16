@@ -364,10 +364,9 @@ curl -X POST https://ca.smartcubes.uk/v1/certs/renew \
 
   1. 下载 CA 公钥并配置 `TrustedUserCAKeys`。
   2. 修改 `sshd_config` 并重启 sshd。
-  3. 收集本机信息（IP、OS、SSH 版本等）上报给签名服务。
-  4. （可选）生成一个专用的 ansible 管理 SSH key，并把公钥上报到签名服务，作为将来 ansible 使用的连接凭据。
+  3. 收集本机信息（IP、OS、SSH 版本等）上报给签名服务，用于审计和可见性。
 
-之后，签名服务就可以自动根据这些信息更新 ansible inventory，或者对该服务器发起管理操作。
+服务器信息上报后，管理员可以了解哪些服务器已配置了CA信任。如需重新配置（如CA密钥变更），只需在各服务器上重新运行bootstrap脚本即可。
 
 ---
 
@@ -385,7 +384,7 @@ curl -fsSL "https://ca.smartcubes.uk/v1/bootstrap/server.sh" \
   | sudo bash
 ```
 
-#### 8.2.2 上报服务器信息与 ansible 公钥
+#### 8.2.2 上报服务器信息
 
 * **URL**：`POST /v1/register/server`
 * **内容类型**：`application/json`
@@ -400,8 +399,6 @@ curl -fsSL "https://ca.smartcubes.uk/v1/bootstrap/server.sh" \
   "arch": "x86_64",
   "ip_addresses": ["10.0.1.10", "192.168.1.50"],
   "ssh_version": "OpenSSH_9.6p1",
-  "ansible_user": "ansible",
-  "ansible_pubkey": "ssh-ed25519 AAAAC3Nz... ansible@web-01",
   "labels": ["prod", "web"],
   "ca_trusted": true
 }
@@ -455,32 +452,19 @@ curl -fsSL "https://ca.smartcubes.uk/v1/bootstrap/server.sh" \
    * `systemctl reload sshd` 或 `systemctl reload ssh`，若失败再尝试 `restart`。
    * 若重启失败，要**回滚** `sshd_config` 修改，并提示手动检查。
 
-6. **生成 ansible 专用 SSH key（可选但建议）**
-
-   * 如果没有 `/home/ansible/.ssh/id_ed25519`：
-
-     ```bash
-     useradd -m ansible  # 如用户不存在
-     sudo -u ansible ssh-keygen -t ed25519 -N "" -f /home/ansible/.ssh/id_ed25519
-     ```
-   * 读取公钥内容。
-
-7. **上报注册信息**
+6. **上报注册信息**
 
    * 构造 JSON（无 jq 也能用 pure bash 拼）。
    * `curl -X POST https://ca.smartcubes.uk/v1/register/server` 提交。
 
-8. **输出结果**
+7. **输出结果**
 
    * 打印：
 
      * 已配置 `TrustedUserCAKeys`
-     * 已上报信息，返回的 `server_id`
-     * ansible 连接示例：
-
-       ```bash
-       ssh -i ansible_id_ed25519 ansible@web-01
-       ```
+     * CA 公钥内容
+     * 已上报服务器信息，返回的 `server_id`
+     * 如何测试证书认证
 
 ---
 

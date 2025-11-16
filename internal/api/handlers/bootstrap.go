@@ -193,8 +193,43 @@ if [ -n "$RENEW_TOKEN" ]; then
     echo "Renew token saved"
 fi
 
+# Configure SSH to use CA key by default
+SSH_CONFIG="$HOME/.ssh/config"
+echo ""
+echo "Configuring SSH client..."
+
+# Create .ssh/config if it doesn't exist
+if [ ! -f "$SSH_CONFIG" ]; then
+    touch "$SSH_CONFIG"
+    chmod 600 "$SSH_CONFIG"
+fi
+
+# Check if CA key configuration already exists
+if ! grep -q "IdentityFile.*id_ed25519_ca" "$SSH_CONFIG"; then
+    # Backup existing config
+    cp "$SSH_CONFIG" "$SSH_CONFIG.bak.$(date +%s)" 2>/dev/null || true
+
+    # Add CA key configuration at the beginning
+    {
+        echo "# SSH CA Certificate Authentication"
+        echo "# Added by CA bootstrap script on $(date)"
+        echo "Host *"
+        echo "    IdentityFile ~/.ssh/id_ed25519_ca"
+        echo "    IdentitiesOnly no"
+        echo ""
+        cat "$SSH_CONFIG"
+    } > "$SSH_CONFIG.tmp"
+
+    mv "$SSH_CONFIG.tmp" "$SSH_CONFIG"
+    chmod 600 "$SSH_CONFIG"
+    echo "✓ SSH config updated to prioritize CA certificate key"
+else
+    echo "✓ SSH config already configured for CA certificate"
+fi
+
 echo ""
 echo "=== Bootstrap Complete ==="
-echo "You can now use: ssh -i $KEY_FILE user@server"
+echo "Your SSH client is now configured to use CA certificates by default"
+echo "Test with: ssh $USERNAME@<server>"
 `
 }
