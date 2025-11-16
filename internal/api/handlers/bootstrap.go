@@ -359,24 +359,56 @@ echo "✓ Renewal script created: $RENEW_SCRIPT"
 echo ""
 echo "Installing automatic renewal to crontab..."
 
-# Check if crontab entry already exists
-if crontab -l 2>/dev/null | grep -q "ssh_ca_renew.sh"; then
-    echo "✓ Crontab entry already exists"
+# Check if crontab is available
+if ! command -v crontab &> /dev/null; then
+    echo "⚠ Crontab not available on this system"
+    echo ""
+    echo "Automatic renewal NOT configured."
+    echo "You will need to manually renew certificates or configure your own scheduler."
+    echo ""
+    echo "Manual renewal command:"
+    echo "  bash $RENEW_SCRIPT"
+    echo ""
+    echo "Alternative schedulers:"
+    echo "  • systemd timer (Linux)"
+    echo "  • Task Scheduler (Windows)"
+    echo "  • launchd (macOS)"
+    CRONTAB_INSTALLED="no"
 else
-    # Get current crontab
-    CURRENT_CRONTAB=$(crontab -l 2>/dev/null || echo "")
+    # Check if crontab entry already exists
+    if crontab -l 2>/dev/null | grep -q "ssh_ca_renew.sh"; then
+        echo "✓ Crontab entry already exists"
+        CRONTAB_INSTALLED="yes"
+    else
+        # Try to add crontab entry
+        CURRENT_CRONTAB=$(crontab -l 2>/dev/null || echo "")
 
-    # Add new entry
-    (
-        echo "$CURRENT_CRONTAB"
-        echo ""
-        echo "# SSH CA Certificate Auto-Renewal (checks every 30 minutes)"
-        echo "*/30 * * * * $HOME/.ssh/ssh_ca_renew.sh >/dev/null 2>&1"
-    ) | crontab -
-
-    echo "✓ Crontab entry added (runs every 30 minutes)"
-    echo "  To view: crontab -l"
-    echo "  To remove: crontab -e"
+        if (
+            echo "$CURRENT_CRONTAB"
+            echo ""
+            echo "# SSH CA Certificate Auto-Renewal (checks every 30 minutes)"
+            echo "*/30 * * * * $HOME/.ssh/ssh_ca_renew.sh >/dev/null 2>&1"
+        ) | crontab - 2>/dev/null; then
+            echo "✓ Crontab entry added (runs every 30 minutes)"
+            echo "  To view: crontab -l"
+            echo "  To remove: crontab -e"
+            CRONTAB_INSTALLED="yes"
+        else
+            echo "⚠ Failed to install crontab entry"
+            echo ""
+            echo "This may happen on:"
+            echo "  • NixOS (use systemd user timer instead)"
+            echo "  • Systems without cron daemon"
+            echo "  • Restricted environments"
+            echo ""
+            echo "Automatic renewal NOT configured."
+            echo "You will need to manually renew certificates or configure your own scheduler."
+            echo ""
+            echo "Manual renewal command:"
+            echo "  bash $RENEW_SCRIPT"
+            CRONTAB_INSTALLED="no"
+        fi
+    fi
 fi
 
 # Test renewal script syntax
@@ -400,12 +432,37 @@ echo "  Renewal log: $HOME/.ssh/ssh_ca_renew.log"
 echo ""
 echo "Your SSH client is configured to:"
 echo "  ✓ Use CA certificates by default (see ~/.ssh/config)"
-echo "  ✓ Automatically renew certificates every 30 minutes"
+
+if [ "$CRONTAB_INSTALLED" = "yes" ]; then
+    echo "  ✓ Automatically renew certificates every 30 minutes"
+else
+    echo "  ⚠ Automatic renewal NOT configured (crontab unavailable)"
+    echo ""
+    echo "⚠ IMPORTANT: You must set up certificate renewal yourself!"
+    echo ""
+    echo "Options:"
+    echo "  1. Run renewal script manually before certificate expires:"
+    echo "     bash $RENEW_SCRIPT"
+    echo ""
+    echo "  2. Set up a scheduler for your system:"
+    echo "     • systemd timer (most Linux distributions)"
+    echo "     • Task Scheduler (Windows)"
+    echo "     • launchd (macOS)"
+    echo ""
+    echo "  Certificates expire in 24 hours by default."
+    echo "  Run the renewal script when < 12 hours remain."
+fi
+
 echo ""
 echo "Test SSH connection:"
 echo "  ssh $USERNAME@<server>"
 echo ""
-echo "Manual renewal (if needed):"
-echo "  bash $RENEW_SCRIPT"
+if [ "$CRONTAB_INSTALLED" = "yes" ]; then
+    echo "Manual renewal (if needed):"
+    echo "  bash $RENEW_SCRIPT"
+else
+    echo "Manual renewal (required):"
+    echo "  bash $RENEW_SCRIPT"
+fi
 `
 }
