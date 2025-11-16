@@ -47,6 +47,36 @@
             opacity: 0.95;
         }
 
+        .github-link {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255,255,255,0.25);
+            color: white;
+            text-decoration: none;
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 15px;
+            transition: all 0.3s;
+            border: 2px solid rgba(255,255,255,0.3);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .github-link:hover {
+            background: rgba(255,255,255,0.35);
+            border-color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+        }
+
+        .github-icon {
+            font-size: 24px;
+        }
+
         .lang-switcher {
             position: absolute;
             top: 20px;
@@ -178,12 +208,54 @@
 
         .status-badge {
             display: inline-block;
-            background: #28a745;
             color: white;
             padding: 6px 12px;
             border-radius: 20px;
             font-size: 14px;
             margin-left: 10px;
+            font-weight: 600;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .status-badge.online {
+            background: #28a745;
+            box-shadow: 0 0 12px rgba(40, 167, 69, 0.5);
+        }
+
+        .status-badge.offline {
+            background: #dc3545;
+            box-shadow: 0 0 12px rgba(220, 53, 69, 0.5);
+        }
+
+        .status-badge.checking {
+            background: #ffc107;
+            box-shadow: 0 0 12px rgba(255, 193, 7, 0.5);
+        }
+
+        .status-badge::before {
+            content: '';
+            position: absolute;
+            left: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: white;
+        }
+
+        .status-badge.online::before {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
         }
 
         @media (max-width: 768px) {
@@ -206,6 +278,10 @@
 <body>
     <div class="container">
         <div class="header">
+            <a href="https://github.com/adamscao/caserver" target="_blank" class="github-link">
+                <span class="github-icon">⚡</span>
+                <span>GitHub</span>
+            </a>
             <div class="lang-switcher">
                 <button class="lang-btn active" onclick="switchLang('en')">English</button>
                 <button class="lang-btn" onclick="switchLang('zh')">中文</button>
@@ -213,7 +289,7 @@
             <h1>🔐 SSH CA Server</h1>
             <p class="lang-content active" data-lang="en">Centralized SSH Certificate Authority Service</p>
             <p class="lang-content" data-lang="zh">集中式SSH证书颁发服务</p>
-            <span class="status-badge">Online</span>
+            <span class="status-badge checking" id="status-badge">Checking...</span>
         </div>
 
         <!-- English Content -->
@@ -593,6 +669,44 @@
             // Update HTML lang attribute
             document.documentElement.lang = lang;
         }
+
+        // Health check for status badge
+        async function checkHealth() {
+            const badge = document.getElementById('status-badge');
+            badge.className = 'status-badge checking';
+            badge.textContent = 'Checking...';
+
+            try {
+                const response = await fetch('/health', {
+                    method: 'GET',
+                    cache: 'no-cache'
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status === 'ok') {
+                        badge.className = 'status-badge online';
+                        badge.textContent = 'Online';
+                    } else {
+                        badge.className = 'status-badge offline';
+                        badge.textContent = 'Offline';
+                    }
+                } else {
+                    badge.className = 'status-badge offline';
+                    badge.textContent = 'Offline';
+                }
+            } catch (error) {
+                console.error('Health check failed:', error);
+                badge.className = 'status-badge offline';
+                badge.textContent = 'Offline';
+            }
+        }
+
+        // Check health on page load
+        checkHealth();
+
+        // Check periodically every 30 seconds
+        setInterval(checkHealth, 30000);
     </script>
 </body>
 </html>
