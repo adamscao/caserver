@@ -69,10 +69,12 @@ fi
 
 # Reload sshd
 echo "Reloading sshd..."
-systemctl reload sshd || systemctl restart sshd
+systemctl reload sshd 2>/dev/null || systemctl restart sshd 2>/dev/null || \
+systemctl reload ssh 2>/dev/null || systemctl restart ssh 2>/dev/null || \
+echo "Warning: Could not reload sshd/ssh service"
 
 # Collect system info
-HOSTNAME=$(hostname)
+HOSTNAME=$(hostname 2>/dev/null || uname -n)
 OS=$(grep ^PRETTY_NAME /etc/os-release | cut -d= -f2- | tr -d '"')
 KERNEL=$(uname -r)
 ARCH=$(uname -m)
@@ -144,12 +146,12 @@ read -p "TOTP Code: " TOTP
 KEY_FILE="$HOME/.ssh/id_ed25519_ca"
 if [ ! -f "$KEY_FILE" ]; then
     echo "Generating SSH key..."
-    ssh-keygen -t ed25519 -f "$KEY_FILE" -N "" -C "$USERNAME@$(hostname)"
+    ssh-keygen -t ed25519 -f "$KEY_FILE" -N "" -C "$USERNAME@$(hostname 2>/dev/null || uname -n)"
 fi
 
 # Read public key
 PUBKEY=$(cat "$KEY_FILE.pub")
-HOSTNAME=$(hostname)
+HOSTNAME=$(hostname 2>/dev/null || uname -n)
 
 # Request certificate
 echo "Requesting certificate..."
