@@ -31,7 +31,7 @@ func SignCertificate(kp *KeyPair, req *SignRequest) (string, error) {
 	validAfter := uint64(now.Unix())
 	validBefore := uint64(now.Add(req.ValidityPeriod).Unix())
 
-	// Create certificate
+	// Create certificate with standard extensions
 	cert := &ssh.Certificate{
 		Key:             userPubKey,
 		Serial:          req.SerialNumber,
@@ -40,6 +40,16 @@ func SignCertificate(kp *KeyPair, req *SignRequest) (string, error) {
 		ValidPrincipals: []string{req.Principal},
 		ValidAfter:      validAfter,
 		ValidBefore:     validBefore,
+		// Add standard SSH certificate permissions/extensions
+		Permissions: ssh.Permissions{
+			Extensions: map[string]string{
+				"permit-X11-forwarding":   "",
+				"permit-agent-forwarding": "",
+				"permit-port-forwarding":  "",
+				"permit-pty":              "",
+				"permit-user-rc":          "",
+			},
+		},
 	}
 
 	// Sign the certificate
@@ -54,7 +64,9 @@ func SignCertificate(kp *KeyPair, req *SignRequest) (string, error) {
 
 	// Marshal certificate to string
 	certBytes := ssh.MarshalAuthorizedKey(cert)
-	return string(certBytes), nil
+	// Remove trailing newline to ensure valid JSON
+	certString := string(bytes.TrimSpace(certBytes))
+	return certString, nil
 }
 
 // ParseCertificate parses an SSH certificate
