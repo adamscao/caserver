@@ -41,24 +41,51 @@ func loadKeyPair(privatePath string) (*KeyPair, error) {
 		return nil, fmt.Errorf("failed to read private key: %w", err)
 	}
 
-	// Parse private key
-	signer, err := ssh.ParsePrivateKey(privateBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse private key: %w", err)
+	// Parse PEM block
+	block, _ := pem.Decode(privateBytes)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block")
 	}
 
-	// Get the crypto.Signer from ssh.Signer
-	cryptoSigner, ok := signer.(ssh.CryptoPublicKey).CryptoPublicKey().(crypto.Signer)
-	if !ok {
-		// For ed25519 and rsa keys, we need to extract the private key differently
-		// This is a limitation - for now we'll just use the ssh.Signer's public key
-		// and re-parse if needed
+	var signer crypto.Signer
+	var keyType string
+
+	// Parse the private key based on type
+	switch block.Type {
+	case "PRIVATE KEY": // PKCS8 format (ed25519)
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse PKCS8 private key: %w", err)
+		}
+		var ok bool
+		signer, ok = key.(crypto.Signer)
+		if !ok {
+			return nil, fmt.Errorf("key does not implement crypto.Signer")
+		}
+		keyType = "ed25519"
+
+	case "RSA PRIVATE KEY": // PKCS1 format (rsa)
+		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse RSA private key: %w", err)
+		}
+		signer = key
+		keyType = "rsa"
+
+	default:
+		return nil, fmt.Errorf("unsupported key type: %s", block.Type)
+	}
+
+	// Create SSH public key
+	sshPubKey, err := ssh.NewPublicKey(signer.Public())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SSH public key: %w", err)
 	}
 
 	return &KeyPair{
-		PrivateKey: cryptoSigner,
-		PublicKey:  signer.PublicKey(),
-		KeyType:    signer.PublicKey().Type(),
+		PrivateKey: signer,
+		PublicKey:  sshPubKey,
+		KeyType:    keyType,
 	}, nil
 }
 

@@ -124,6 +124,16 @@ for cmd in ssh ssh-keygen curl; do
     fi
 done
 
+# Check for JSON parser
+if command -v jq &> /dev/null; then
+    JSON_PARSER="jq"
+elif command -v python3 &> /dev/null; then
+    JSON_PARSER="python3"
+else
+    echo "Error: Either 'jq' or 'python3' is required for JSON parsing"
+    exit 1
+fi
+
 # Get user info
 read -p "Username: " USERNAME
 read -sp "Password: " PASSWORD
@@ -155,12 +165,25 @@ RESPONSE=$(curl -fsSL -X POST "$ISSUE_URL" \
         \"requested_validity\": \"24h\"
     }")
 
-# Extract certificate
-CERT=$(echo "$RESPONSE" | grep -o '"certificate":"[^"]*"' | cut -d'"' -f4)
-RENEW_TOKEN=$(echo "$RESPONSE" | grep -o '"renew_token":"[^"]*"' | cut -d'"' -f4)
+# Extract certificate and token using appropriate JSON parser
+if [ "$JSON_PARSER" = "jq" ]; then
+    CERT=$(echo "$RESPONSE" | jq -r '.certificate')
+    RENEW_TOKEN=$(echo "$RESPONSE" | jq -r '.renew_token')
+else
+    # Use Python for JSON parsing
+    CERT=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['certificate'], end='')")
+    RENEW_TOKEN=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('renew_token', ''), end='')")
+fi
 
-# Save certificate
-echo "$CERT" > "$KEY_FILE-cert.pub"
+# Validate certificate
+if [ -z "$CERT" ] || [ "$CERT" = "null" ]; then
+    echo "Error: Failed to get certificate from server"
+    echo "Response: $RESPONSE"
+    exit 1
+fi
+
+# Save certificate (use printf to avoid adding newline)
+printf "%s" "$CERT" > "$KEY_FILE-cert.pub"
 echo "Certificate saved to $KEY_FILE-cert.pub"
 
 # Save renew token
