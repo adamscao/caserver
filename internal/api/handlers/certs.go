@@ -227,7 +227,7 @@ func (h *CertHandler) IssueCertificate(c *gin.Context) {
 
 // RenewRequest represents a certificate renewal request
 type RenewRequest struct {
-	Username          string `json:"username" binding:"required"`
+	Username          string `json:"username"` // Optional - will be derived from token if not provided
 	PublicKey         string `json:"public_key" binding:"required"`
 	RenewToken        string `json:"renew_token" binding:"required"`
 	CurrentCert       string `json:"current_cert"`
@@ -255,13 +255,6 @@ func (h *CertHandler) RenewCertificate(c *gin.Context) {
 	clientIP := GetClientIP(c)
 	userAgent := c.GetHeader("User-Agent")
 
-	// Get user
-	user, err := h.userRepo.GetByUsername(req.Username)
-	if err != nil {
-		RespondError(c, http.StatusUnauthorized, "invalid_user", "User not found")
-		return
-	}
-
 	// Get public key fingerprint
 	fingerprint, err := sshutil.GetFingerprint(req.PublicKey)
 	if err != nil {
@@ -269,11 +262,18 @@ func (h *CertHandler) RenewCertificate(c *gin.Context) {
 		return
 	}
 
-	// Validate token
+	// Validate token (this also checks public key binding)
 	tokenHash := auth.HashToken(req.RenewToken)
 	token, err := h.tokenRepo.ValidateToken(tokenHash, fingerprint)
 	if err != nil {
 		RespondError(c, http.StatusUnauthorized, "invalid_token", "Invalid or expired renew token")
+		return
+	}
+
+	// Get user from token (token.UserID is already validated)
+	user, err := h.userRepo.GetByID(token.UserID)
+	if err != nil {
+		RespondError(c, http.StatusUnauthorized, "invalid_user", "User not found")
 		return
 	}
 
