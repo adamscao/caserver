@@ -430,7 +430,17 @@ curl -X POST https://ca.example.com/v1/admin/users \
   }'
 ```
 
-### 4. Test Certificate Issuance
+### 4. Reset User Password
+
+```bash
+# Reset password for existing user
+sudo -u ssh-ca /usr/local/bin/admin user reset-password \
+  --config /etc/ssh-ca/config.yaml \
+  --username admin \
+  --password "NewSecurePassword123!"
+```
+
+### 5. Test Certificate Issuance
 
 ```bash
 # On client machine

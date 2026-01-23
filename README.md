@@ -56,6 +56,14 @@ make run
   --generate-totp
 ```
 
+### Reset User Password
+
+```bash
+./bin/admin user reset-password \
+  -u username \
+  -p newpassword
+```
+
 ## Configuration
 
 See `configs/config.yaml.example` for full configuration options.
