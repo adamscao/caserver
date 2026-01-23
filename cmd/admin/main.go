@@ -42,6 +42,12 @@ var userListCmd = &cobra.Command{
 	RunE:  listUsers,
 }
 
+var userResetPasswordCmd = &cobra.Command{
+	Use:   "reset-password",
+	Short: "Reset user password",
+	RunE:  resetPassword,
+}
+
 var (
 	username       string
 	password       string
@@ -66,9 +72,17 @@ func init() {
 	userCreateCmd.MarkFlagRequired("username")
 	userCreateCmd.MarkFlagRequired("password")
 
+	// User reset-password flags
+	userResetPasswordCmd.Flags().StringVarP(&username, "username", "u", "", "Username (required)")
+	userResetPasswordCmd.Flags().StringVarP(&password, "password", "p", "", "New password (required)")
+
+	userResetPasswordCmd.MarkFlagRequired("username")
+	userResetPasswordCmd.MarkFlagRequired("password")
+
 	// Add commands
 	userCmd.AddCommand(userCreateCmd)
 	userCmd.AddCommand(userListCmd)
+	userCmd.AddCommand(userResetPasswordCmd)
 	rootCmd.AddCommand(userCmd)
 }
 
@@ -187,6 +201,37 @@ func listUsers(cmd *cobra.Command, args []string) error {
 			user.CreatedAt.Format("2006-01-02 15:04:05"),
 		)
 	}
+
+	return nil
+}
+
+func resetPassword(cmd *cobra.Command, args []string) error {
+	if err := initDB(); err != nil {
+		return err
+	}
+	defer database.Close()
+
+	userRepo := repository.NewUserRepository(database.DB)
+
+	// Get user by username
+	user, err := userRepo.GetByUsername(username)
+	if err != nil {
+		return fmt.Errorf("failed to find user: %w", err)
+	}
+
+	// Hash new password
+	passwordHash, err := auth.HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	// Update user password
+	user.PasswordHash = passwordHash
+	if err := userRepo.Update(user); err != nil {
+		return fmt.Errorf("failed to update user password: %w", err)
+	}
+
+	fmt.Printf("\nPassword for user '%s' (ID: %d) has been reset successfully!\n", user.Username, user.ID)
 
 	return nil
 }
