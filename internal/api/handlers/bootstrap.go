@@ -153,19 +153,35 @@ fi
 PUBKEY=$(cat "$KEY_FILE.pub")
 HOSTNAME=$(hostname 2>/dev/null || uname -n)
 
-# Request certificate
+# Build JSON request body safely (handles special characters in password)
 echo "Requesting certificate..."
+if [ "$JSON_PARSER" = "jq" ]; then
+    JSON_DATA=$(jq -n \
+        --arg username "$USERNAME" \
+        --arg password "$PASSWORD" \
+        --arg totp "$TOTP" \
+        --arg pubkey "$PUBKEY" \
+        --arg hostname "$HOSTNAME" \
+        '{username: $username, password: $password, totp: $totp, public_key: $pubkey, client_hostname: $hostname, requested_principals: [$username], requested_validity: "24h"}')
+else
+    # Use environment variables to safely pass data to Python
+    JSON_DATA=$(USERNAME="$USERNAME" PASSWORD="$PASSWORD" TOTP="$TOTP" PUBKEY="$PUBKEY" HOSTNAME="$HOSTNAME" python3 -c '
+import json, os
+print(json.dumps({
+    "username": os.environ["USERNAME"],
+    "password": os.environ["PASSWORD"],
+    "totp": os.environ["TOTP"],
+    "public_key": os.environ["PUBKEY"],
+    "client_hostname": os.environ["HOSTNAME"],
+    "requested_principals": [os.environ["USERNAME"]],
+    "requested_validity": "24h"
+}))
+')
+fi
+
 RESPONSE=$(curl -fsSL -X POST "$ISSUE_URL" \
     -H "Content-Type: application/json" \
-    -d "{
-        \"username\": \"$USERNAME\",
-        \"password\": \"$PASSWORD\",
-        \"totp\": \"$TOTP\",
-        \"public_key\": \"$PUBKEY\",
-        \"client_hostname\": \"$HOSTNAME\",
-        \"requested_principals\": [\"$USERNAME\"],
-        \"requested_validity\": \"24h\"
-    }")
+    -d "$JSON_DATA")
 
 # Extract certificate and token using appropriate JSON parser
 if [ "$JSON_PARSER" = "jq" ]; then
